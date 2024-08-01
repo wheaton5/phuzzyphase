@@ -351,11 +351,13 @@ fn log_sum_exp(p: &Vec<f32>) -> f32 {
     let sum_rst: f32 = p.iter().map(|x| (x - max_p).exp()).sum();
     max_p + sum_rst.ln()
 }
+
 fn log_sum_exp64(p: &Vec<f64>) -> f64 {
     let max_p: f64 = p.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     let sum_rst: f64 = p.iter().map(|x| (x - max_p).exp()).sum();
     max_p + sum_rst.ln()
 }
+
 fn phase_chunk(data: &ThreadData) -> Result<(), Error> {
     println!("checking for file {}", data.phased_vcf_done);
     if Path::new(&data.phased_vcf_done).exists() {
@@ -421,10 +423,16 @@ fn phase_chunk(data: &ThreadData) -> Result<(), Error> {
 
             if in_phaseblock && breaking_point {
                 in_phaseblock = false;
-                while cluster_centers[0][last_attempted_index] == 0.5 && 
+                while cluster_centers[0][last_attempted_index] == cluster_centers[1][last_attempted_index] && 
                     vcf_info.variant_positions[last_attempted_index] > window_start {
                     last_attempted_index -= 1;
                 }
+
+                // WE CHANGED THIS AFTER PREVIOUS TESTING
+                if vcf_info.variant_positions[last_attempted_index] < window_start {
+                    last_attempted_index += 1;
+                }
+                // END
                 
                 putative_phase_blocks.push(PhaseBlock{
                     id: putative_phase_blocks.len(),
@@ -434,6 +442,14 @@ fn phase_chunk(data: &ThreadData) -> Result<(), Error> {
                     end_position: vcf_info.variant_positions[last_attempted_index]
                 });
                 
+                // WE CHANGED THIS AFTER PREVIOUS TESTING
+                phase_block_start = last_attempted_index + 1;
+                if phase_block_start >= vcf_info.variant_positions.len() {
+                    break 'outer;
+                }
+                window_start = vcf_info.variant_positions[phase_block_start];
+                // END
+                /** WE COMMENTED THIS OUT AFTER PREVIOUS TESTING
                 phase_block_start = last_attempted_index;
                 last_window_start = Some(window_start);
                 if let Some(previous_window_start) = last_window_start {
@@ -452,6 +468,7 @@ fn phase_chunk(data: &ThreadData) -> Result<(), Error> {
                     } // we are at the end of the region or chromosome, we are done
                     window_start = vcf_info.variant_positions[phase_block_start];
                 }
+                **/
                 eprintln!("in phaseblock but hit breakpoint, reseting window start to {}", window_start);
                 window_end = window_start + data.phasing_window;
                 for haplotype in 0..cluster_centers.len() {
@@ -615,16 +632,16 @@ fn test_long_switch(start_index: usize, end_index: usize,
     cluster_centers: &mut Vec<Vec<f32>>, vcf_info: &VCF_info, 
     vcf_reader: &mut bcf::IndexedReader, data: &ThreadData) -> Vec<PhaseBlock> {
     let mut to_return: Vec<PhaseBlock> = Vec::new();
-    if data.ploidy > 2 {
-    to_return.push(PhaseBlock{
-        start_index: start_index,
-        start_position: vcf_info.variant_positions[start_index],
-        end_index: end_index + 1,
-        end_position: vcf_info.variant_positions[end_index],
-        id: 0,
-    });
-    return to_return; // currently not doing test_long_switch for polyploid
-    }
+    //if data.ploidy > 2 {
+    //to_return.push(PhaseBlock{
+    //    start_index: start_index,
+    //    start_position: vcf_info.variant_positions[start_index],
+    //    end_index: end_index + 1,
+    //    end_position: vcf_info.variant_positions[end_index],
+    //    id: 0,
+    //});
+    //return to_return; // currently not doing test_long_switch for polyploid
+    //}
 
 
 
@@ -683,6 +700,7 @@ fn test_long_switch(start_index: usize, end_index: usize,
         let posterior = log_posterior.exp();
         if posterior < data.long_switch_threshold {
             // end phase block and add to to_return
+            println!("breaking phaseblock at {}", position);
             to_return.push(PhaseBlock {
                 id: to_return.len(),
                 start_index: phase_block_start,
@@ -810,7 +828,7 @@ fn phase_phaseblocks(data: &ThreadData, cluster_centers: &mut Vec<Vec<f32>>,
         Some(hic) => {}, // if has hic continue as normal
         None => {
             for (id, pb) in phase_blocks.iter().enumerate() {
-                for allele_id in pb.start_index..pb.end_index { 
+                for allele_id in pb.start_index..(pb.end_index + 1) { 
                     allele_phase_block_id.insert(allele_id, pb.start_position); 
                 }    
             }
@@ -959,7 +977,7 @@ fn phase_phaseblocks(data: &ThreadData, cluster_centers: &mut Vec<Vec<f32>>,
         //}
         meta_phaseblocks.push(MetaPhaseBlock { id: pb.start_position, phase_blocks: vec![*pb] });// pb.id, phase_blocks: vec![*pb] });
         meta_phaseblock_map.insert(index, MetaPhaseBlock { id: pb.start_position, phase_blocks: vec![*pb]});//pb.id, phase_blocks: vec![*pb] });
-        for allele_id in pb.start_index..pb.end_index { 
+        for allele_id in pb.start_index..(pb.end_index+1) { 
             allele_phase_block_id.insert(allele_id, pb.start_position);//first_phaseblock_start); 
         }
     }
@@ -1437,10 +1455,12 @@ fn infer_genotype(cluster_centers: &Vec<Vec<f32>>, index: usize, vcf_info: &VCF_
     let mut genotypes: Vec<GenotypeAllele> = Vec::new();
     let mut phased = true;
     let mut all_point5 = true;
+    let lower = 0.15;
+    let upper = 0.85;
     for haplotype in 0..cluster_centers.len() {
         if cluster_centers[haplotype][index] != 0.5 { all_point5 = false;}
-        if cluster_centers[haplotype][index] > 0.95 {
-        } else if cluster_centers[haplotype][index] < 0.05 {
+        if cluster_centers[haplotype][index] > upper {
+        } else if cluster_centers[haplotype][index] < lower {
         } else { phased = false; }
     }
     if all_point5 {
@@ -1459,9 +1479,9 @@ fn infer_genotype(cluster_centers: &Vec<Vec<f32>>, index: usize, vcf_info: &VCF_
         return genotypes;
     }
     for haplotype in 0..cluster_centers.len() {
-        if cluster_centers[haplotype][index] > 0.95 {
+        if cluster_centers[haplotype][index] > upper {
                 genotypes.push(GenotypeAllele::Phased(1));
-        } else if cluster_centers[haplotype][index] < 0.05 {
+        } else if cluster_centers[haplotype][index] < lower {
                 genotypes.push(GenotypeAllele::Phased(0));
         }    
     }
@@ -1533,7 +1553,7 @@ fn get_read_molecules(vcf: &mut bcf::IndexedReader, vcf_info: &VCF_info, read_ty
     }
     let mut to_return: Vec<Vec<Allele>> = Vec::new();
     for (index, (_read_name, alleles)) in molecules.iter().enumerate() {
-        if alleles.len() < 2 {
+        if alleles.len() < 3 {
             continue;
         }
         let mut mol: Vec<Allele> = Vec::new();
@@ -1649,7 +1669,7 @@ fn get_all_variant_assignments(data: &ThreadData) -> Result<(), Error> {
                     let alleles = rec.alleles();
                     let mut new_rec = vcf_writer.empty_record();
                     copy_vcf_record(&mut new_rec, &rec);
-                    if alleles.len() > 2 {
+                    if alleles.len() != 3 {
                         continue; // ignore multi allelic sites
                     }
                     let reference = std::str::from_utf8(alleles[0]).expect("this really shouldnt fail");
@@ -1707,8 +1727,10 @@ fn copy_vcf_record(new_rec: &mut bcf::record::Record, rec: &bcf::record::Record)
     for filter in rec.filters() {
         new_rec.push_filter(&filter).expect("push filter failed");
     }
+    let mut alleles = rec.alleles();
+    alleles.pop();
     new_rec
-        .set_alleles(&rec.alleles())
+        .set_alleles(&alleles)
         .expect("could not write alleles to new record???");
     new_rec.set_qual(rec.qual());
     let header = rec.header();

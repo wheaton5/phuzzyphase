@@ -75,8 +75,8 @@ args:
         long: phasing_window
         required: false
         takes_value: true
-        default_value: "20000"
-        help: base window for phasing solution in sliding window (default 20kb)
+        default_value: "60000"
+        help: base window for phasing solution in sliding window (default 60kb)
     - hic_phasing_posterior_threshold:
         long: hic_phasing_posterior_threshold
         required: false
